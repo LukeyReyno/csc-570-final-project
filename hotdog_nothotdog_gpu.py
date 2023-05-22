@@ -6,6 +6,11 @@ import time
 from torchvision.models.googlenet import googlenet
 from torchvision import datasets
 
+# Device will determine whether to run the training on GPU or CPU.
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+assert device.type == 'cuda'
+
 # disk quota issue
 """def show_images():
     import matplotlib.pyplot as plt
@@ -46,7 +51,7 @@ class HotdogClassifier():
         from torchvision.models import resnet18, ResNet18_Weights
         
         #model = resnet18(weights=ResNet18_Weights.DEFAULT)
-        self.model = googlenet(weights=torchvision.models.GoogLeNet_Weights.DEFAULT)
+        self.model = googlenet(weights=torchvision.models.GoogLeNet_Weights.DEFAULT).to(device)
         
         # check for [32, 224] range
         self.training_resolution = training_resolution
