@@ -2,6 +2,7 @@ import torch
 import torchvision
 import torch.nn as nn
 import time
+import numpy as np
 
 from torchvision.models.googlenet import googlenet
 from torchvision import datasets
@@ -33,41 +34,34 @@ from torchvision import datasets
     out = torchvision.utils.make_grid(inputs[:training_batchsize])
     imshow(out, title="Image Grid")"""
 
-def train_model(resolution):
-    new_model = HotdogClassifier(resolution)
-    new_model.set_up_data()
-    new_model.training_loop()
-    #new_model.save_model()
-    
-    return new_model
-
-class HotdogClassifier():
+class HotdogClassifier(nn.Module):
     def __init__(self, training_resolution):
+        super(HotdogClassifier, self).__init__()
         from torchvision.models import resnet18, ResNet18_Weights
         
         #model = resnet18(weights=ResNet18_Weights.DEFAULT)
-        self.model = googlenet(weights=torchvision.models.GoogLeNet_Weights.DEFAULT)
+        self.transfer_model = googlenet(weights=torchvision.models.GoogLeNet_Weights.DEFAULT)
         
         # check for [32, 224] range
         self.training_resolution = training_resolution
         
         params_not_frozen = []
-        for param in self.model.parameters():
+        for param in self.transfer_model.parameters():
             if param.requires_grad == True:
                 params_not_frozen.append(param)
         #print("We have a lot of layers that are not frozen:",len(params_not_frozen))
         
         # Make sure our parameters are frozen
-        for param in self.model.parameters():
+        for param in self.transfer_model.parameters():
             param.requires_grad = False
             
 
-        num_features = self.model.fc.in_features     #extract fc layers features
+        num_features = self.transfer_model.fc.in_features     #extract fc layers features
         #print('num_features',num_features)
-        self.model.fc = nn.Linear(num_features, 2) #(num_of_class == 2) - here is the magic. 
+        self.transfer_model.fc = nn.Linear(num_features, 2) #(num_of_class == 2) - here is the magic. 
 
         params_not_frozen = []
-        for param in self.model.parameters():
+        for param in self.transfer_model.parameters():
             if param.requires_grad == True:
                 params_not_frozen.append(param)
                 
@@ -126,21 +120,21 @@ class HotdogClassifier():
     def training_loop(self):
         import torch.optim as optim
         criterion = nn.CrossEntropyLoss()  #(set loss function)
-        optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
+        optimizer = optim.SGD(self.transfer_model.parameters(), lr=0.001, momentum=0.9)
 
         num_epochs = 50   #(set no of epochs)
         for epoch in range(num_epochs): #(loop for every epoch)
             self.epochs += 1
             #print("Epoch {} running".format(epoch)) #(printing message)
             """ Training Phase """
-            self.model.train()    #(training model)
+            self.transfer_model.train()    #(training model)
             running_loss = 0.   #(set loss 0)
             running_corrects = 0 
             # load a batch data of images
             for i, (inputs, labels) in enumerate(self.train_dataloader):
                 # forward inputs and get output
                 optimizer.zero_grad()
-                outputs = self.model(inputs)
+                outputs = self.transfer_model(inputs)
                 _, preds = torch.max(outputs, 1)
                 loss = criterion(outputs, labels)
                 # get loss value and update the network weights
@@ -157,12 +151,12 @@ class HotdogClassifier():
             
             
             """ Testing Phase """
-            self.model.eval()
+            self.transfer_model.eval()
             with torch.no_grad():
                 running_loss = 0.
                 running_corrects = 0
                 for inputs, labels in self.test_dataloader:
-                    outputs = self.model(inputs)
+                    outputs = self.transfer_model(inputs)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
                     running_loss += loss.item() * inputs.size(0)
@@ -173,11 +167,42 @@ class HotdogClassifier():
                 if epoch == num_epochs - 1:
                     self.test_accuracy = epoch_acc
                     #print('[Test #{}] Loss: {:.4f} Acc: {:.4f}%'.format(epoch, epoch_loss, epoch_acc))
+                    
+    def validate_single_image(self, path_to_image):
+        def image_loader(loader, image_name):
+            from PIL import Image
+
+            image = Image.open(image_name)
+            image = loader(image).float()
+            image = image.clone().detach().requires_grad_(True)
+            image = image.unsqueeze(0)
+            return image
+
+        import torchvision.transforms as transforms 
+
+        validation_transform = transforms.Compose([
+            transforms.Resize((self.training_resolution, self.training_resolution)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+        
+        self.transfer_model.eval()
+        with torch.no_grad():
+            value = np.argmax(self.transfer_model(image_loader(validation_transform, path_to_image)).detach().numpy())
+            #print(value)
+            print(self.class_names[int(value)])
                 
     def save_model(self, file_path):
-        pass
+        torch.save(self, file_path)
 
-def main():
+def train_model(resolution):
+    new_model = HotdogClassifier(resolution)
+    new_model.set_up_data()
+    new_model.training_loop()
+
+    return new_model
+
+def train_models():
     training_resolutions = [32, 64, 128, 156, 200, 224]
     training_iters = 4
 
@@ -187,13 +212,30 @@ def main():
         #print(f"Training: Resolution {res}")
         for i in range(training_iters):
             start_time = time.time()
-            #print(f"Model {i}")
             model = train_model(res)
-            #model.save_model(f"hotdog_classifier_{res}_{i}.model")
+
+            # save the model
+            model.save_model(f"./saved_models/hotdog_classifier/model_{res}_{i}.pt")
+
             now = time.time()
             print(f"{res},{now - start_time},{model.epochs},{model.training_accuracy},{model.test_accuracy}")
+
+def validation():
+    model = torch.load("./saved_models/hotdog_classifier/model_32_0.pt")
+    model.eval()
     
+    print(model.__dict__)
+
     # could do validation"""
+    model.validate_single_image("./data/hotdog-nothotdog-full/test/hotdog/1676.jpg") # hot
+    model.validate_single_image("./data/hotdog-nothotdog-full/test/nothotdog/27415.jpg") # not
+    model.validate_single_image("./data/hotdog-nothotdog-full/train/nothotdog/6.jpg") # not
+    model.validate_single_image("./data/hotdog-nothotdog-full/test/hotdog/1705.jpg") # hot
+    model.validate_single_image("./data/hotdog-nothotdog-full/train/nothotdog/29.jpg") # not
+
+def main():
+    #train_models()
+    validation()
 
 if __name__ == '__main__':
     main()
